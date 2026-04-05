@@ -155,7 +155,6 @@ function render(){
 /* DASHBOARD */
 function renderDashboard(curExp,yearTotal,docsMonth,docsYear,limitPct,over,priceMonth,priceYear){
   const filteredDocs=(filterDept==="__blank__"?[...(docs||[])].filter(d=>!d.sender||d.sender===""):filterDept?[...(docs||[])].filter(d=>d.sender===filterDept):[...(docs||[])]).sort((a,b)=>b.date.localeCompare(a.date));
-  const maxDocCnt=Math.max(...DEPTS.map(d=>(docs||[]).filter(x=>x.sender===d).length),1);
   const totalPriceAll=(docs||[]).reduce((s,d)=>s+(+d.price||0),0);
   return `<div id="dashboardRoot" style="max-width:1320px;margin:0 auto;padding:22px 20px;">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
@@ -206,44 +205,10 @@ function renderDashboard(curExp,yearTotal,docsMonth,docsYear,limitPct,over,price
     <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:#64748b;"><span>ใช้ไป ฿${fmt(curExp.total)}</span><span>คงเหลือ ฿${fmt(Math.max(0,LIMIT-curExp.total))}</span></div>
   </div>
 
-  <!-- 3 CHARTS ROW -->
-  <div style="display:grid;grid-template-columns:5fr 3fr 3fr;gap:14px;margin-bottom:18px;">
+  <!-- CHART ROW -->
+  <div style="margin-bottom:18px;">
     <div class="fade-up" style="animation-delay:.35s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;overflow:hidden;">
       <canvas id="mainChart" style="width:100%;display:block;border-radius:6px;"></canvas>
-    </div>
-    <div class="fade-up" style="animation-delay:.42s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px;">
-      <div style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">💰 ค่าใช้จ่ายแผนก</div>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        ${DEPTS.map((d,i)=>{
-          const amt=curExp.departments?.[d]||0;
-          const pct=curExp.total>0?Math.round(amt/curExp.total*100):0;
-          const c=DEPT_COLORS[i];
-          return `<div>
-            <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px;">
-              <span style="color:${c};font-weight:600;">${deptShort(d)}</span>
-              <span style="font-family:'DM Mono',monospace;color:#64748b;">฿${fmt(amt)}</span>
-            </div>
-            <div style="height:5px;background:#e2e8f0;border-radius:99px;"><div style="height:100%;width:${pct}%;background:${c};border-radius:99px;transition:width .6s;"></div></div>
-          </div>`;
-        }).join("")}
-      </div>
-    </div>
-    <div class="fade-up" style="animation-delay:.49s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px;">
-      <div style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">📦 เอกสารแยกตามฝ่าย</div>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        ${DEPTS.map((d,i)=>{
-          const cnt=(docs||[]).filter(x=>x.sender===d).length;
-          if(!cnt)return`<div style="display:flex;justify-content:space-between;font-size:10px;"><span style="color:#64748b;">${deptShort(d)}</span><span style="color:#64748b;">0</span></div>`;
-          const pct=Math.round(cnt/maxDocCnt*100);const c=DEPT_COLORS[i];
-          return `<div>
-            <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px;">
-              <span style="color:${c};font-weight:600;">${deptShort(d)}</span>
-              <span style="font-family:'DM Mono',monospace;color:#64748b;">${cnt}</span>
-            </div>
-            <div style="height:5px;background:#e2e8f0;border-radius:99px;"><div style="height:100%;width:${pct}%;background:${c};border-radius:99px;"></div></div>
-          </div>`;
-        }).join("")}
-      </div>
     </div>
   </div>
 
@@ -362,13 +327,6 @@ function renderAdminExpenses(curExp,yearTotal){
           ${MONTHS_S.map((m,i)=>`<option value="${i}" ${i===CUR_M?"selected":""}>${m}</option>`).join("")}
         </select>
       </div>
-      <div>
-        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">แผนก</div>
-        <select id="qa_dept" style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 12px;color:#0f172a;font-size:12px;min-width:180px;">
-          <option value="">— ไม่ระบุแผนก —</option>
-          ${DEPTS.map((d,i)=>`<option value="${d}" style="color:${DEPT_COLORS[i]}">${d}</option>`).join("")}
-        </select>
-      </div>
       <div style="flex:1;min-width:120px;">
         <div style="font-size:10px;color:#64748b;margin-bottom:4px;">จำนวนเงิน (บาท)</div>
         <input type="number" id="qa_amount" min="0" placeholder="0"
@@ -395,47 +353,43 @@ function renderAdminExpenses(curExp,yearTotal){
   </div>
   <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
     <div style="overflow-x:auto;">
-      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
         <thead><tr style="background:#f8fafc;">
-          <th style="padding:9px 12px;text-align:left;color:#64748b;font-size:10px;min-width:70px;">เดือน</th>
-          ${DEPTS.map((d,i)=>`<th style="padding:9px 7px;text-align:right;color:${DEPT_COLORS[i]};font-size:9px;min-width:75px;">${deptShort(d)}</th>`).join("")}
-          <th style="padding:9px 7px;text-align:right;color:#64748b;font-size:9px;min-width:75px;">ไม่ระบุ</th>
-          <th style="padding:9px 12px;text-align:right;color:#64748b;font-size:10px;min-width:75px;">รวม</th>
-          <th style="padding:9px 8px;text-align:center;color:#64748b;font-size:10px;">สถานะ</th>
-          <th style="padding:9px 8px;text-align:center;color:#64748b;font-size:10px;"></th>
+          <th style="padding:11px 18px;text-align:left;color:#64748b;font-size:10px;letter-spacing:.5px;">เดือน</th>
+          <th style="padding:11px 18px;text-align:right;color:#64748b;font-size:10px;letter-spacing:.5px;">ค่าใช้จ่าย (บาท)</th>
+          <th style="padding:11px 18px;text-align:center;color:#64748b;font-size:10px;letter-spacing:.5px;">สถานะ</th>
+          <th style="padding:11px 18px;text-align:center;color:#64748b;font-size:10px;"></th>
         </tr></thead>
         <tbody>
         ${(expenses||[]).map(e=>`
         <tr class="row-tr" style="border-top:1px solid #0b1a2e;background:${e.month===CUR_M?"rgba(56,189,248,.04)":"transparent"}">
-          <td style="padding:8px 12px;color:${e.month===CUR_M?"#38bdf8":"#64748b"};font-weight:${e.month===CUR_M?600:400};white-space:nowrap;">
-            ${MONTHS_S[e.month]}${e.month===CUR_M?` <span style="font-size:8px;color:#0ea5e9;">●</span>`:""}
+          <td style="padding:10px 18px;color:${e.month===CUR_M?"#38bdf8":"#64748b"};font-weight:${e.month===CUR_M?600:400};font-size:13px;">
+            ${MONTHS_F[e.month]}${e.month===CUR_M?` <span style="font-size:8px;color:#0ea5e9;margin-left:4px;">● เดือนนี้</span>`:""}
           </td>
-          ${DEPTS.map((d,i)=>`
-          <td style="padding:8px 5px;text-align:right;">
-            <span onclick="editNum(this,${e.month},'${d}')"
-              style="font-family:'DM Mono',monospace;font-size:10px;color:${DEPT_COLORS[i]};cursor:text;border-bottom:1px dashed #334155;padding:1px 4px;border-radius:3px;"
+          <td style="padding:10px 18px;text-align:right;">
+            <span onclick="editMonthTotal(this,${e.month})"
+              style="font-family:'DM Mono',monospace;font-size:14px;font-weight:600;color:${e.total>LIMIT?"#fca5a5":e.total>0?"#f1f5f9":"#475569"};cursor:text;border-bottom:1px dashed #334155;padding:2px 6px;border-radius:3px;"
               onmouseover="this.style.background='rgba(56,189,248,.1)'" onmouseout="this.style.background='transparent'">
-              ${fmt(e.departments?.[d]||0)}
-            </span>
-          </td>`).join("")}
-          <td style="padding:8px 5px;text-align:right;">
-            <span onclick="editNum(this,${e.month},'__unspecified__')"
-              style="font-family:'DM Mono',monospace;font-size:10px;color:#64748b;cursor:text;border-bottom:1px dashed #334155;padding:1px 4px;border-radius:3px;"
-              onmouseover="this.style.background='rgba(56,189,248,.1)'" onmouseout="this.style.background='transparent'">
-              ${fmt(e.departments?.['__unspecified__']||0)}
+              ${e.total>0?"฿"+fmt(e.total):"—"}
             </span>
           </td>
-          <td style="padding:8px 12px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;font-size:11px;color:${e.total>LIMIT?"#fca5a5":"#f1f5f9"};">${e.total>0?`฿${fmt(e.total)}`:"–"}</td>
-          <td style="padding:8px 8px;text-align:center;">
-            ${e.total>LIMIT?`<span style="background:#450a0a;color:#fca5a5;border-radius:99px;padding:2px 8px;font-size:9px;">เกินงบ</span>`
-            :e.total>0?`<span style="background:#022c22;color:#34d399;border-radius:99px;padding:2px 8px;font-size:9px;">ปกติ</span>`
-            :`<span style="color:#64748b;font-size:10px;">–</span>`}
+          <td style="padding:10px 18px;text-align:center;">
+            ${e.total>LIMIT?`<span style="background:#450a0a;color:#fca5a5;border-radius:99px;padding:3px 10px;font-size:10px;font-weight:600;">เกินงบ</span>`
+            :e.total>0?`<span style="background:#022c22;color:#34d399;border-radius:99px;padding:3px 10px;font-size:10px;font-weight:600;">ปกติ</span>`
+            :`<span style="color:#475569;font-size:12px;">–</span>`}
           </td>
-          <td style="padding:8px 8px;text-align:center;">
-            ${e.total>0?`<button class="btn" onclick="resetMonthExpense(${e.month})" style="background:#1a0a0a;border:1px solid #450a0a;border-radius:6px;padding:2px 8px;color:#fca5a5;font-size:10px;">รีเซ็ต</button>`:""}
+          <td style="padding:10px 18px;text-align:center;">
+            ${e.total>0?`<button class="btn" onclick="resetMonthExpense(${e.month})" style="background:#1a0a0a;border:1px solid #450a0a;border-radius:6px;padding:3px 10px;color:#fca5a5;font-size:11px;">รีเซ็ต</button>`:""}
           </td>
         </tr>`).join("")}
         </tbody>
+        <tfoot>
+          <tr style="border-top:2px solid #1e3a5f;">
+            <td style="padding:10px 18px;font-size:12px;color:#64748b;font-weight:600;">รวมทั้งปี</td>
+            <td style="padding:10px 18px;text-align:right;font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:#818cf8;">฿${fmt(yearTotal)}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   </div>
@@ -688,22 +642,32 @@ function resetMonthExpense(month){
 
 function quickAddExpense(){
   const month=+document.getElementById("qa_month").value;
-  const dept=document.getElementById("qa_dept").value||"__unspecified__";
   const amt=Math.max(0,+document.getElementById("qa_amount").value||0);
   const msgEl=document.getElementById("qa_msg");
   if(document.getElementById("qa_amount").value===""){
     if(msgEl)msgEl.innerHTML=`<span style="color:#fca5a5;">⚠️ กรุณาใส่จำนวนเงิน</span>`;return;
   }
-  expenses=expenses.map(e=>{
-    if(e.month!==month)return e;
-    const nd={...e.departments,[dept]:amt};
-    return{...e,departments:nd,total:Object.values(nd).reduce((s,v)=>s+(+v||0),0)};
-  });
+  expenses=expenses.map(e=>e.month!==month?e:{...e,total:amt});
   persist();render();
   const m2=document.getElementById("qa_msg");
-  if(m2)m2.innerHTML=`<span style="color:#34d399;">✓ บันทึก ฿${fmt(amt)} ใน${MONTHS_F[month]}${dept!=="__unspecified__"?" ("+dept+")":""} แล้ว</span>`;
+  if(m2)m2.innerHTML=`<span style="color:#34d399;">✓ บันทึก ฿${fmt(amt)} ใน${MONTHS_F[month]} แล้ว · กรอกใหม่เพื่อแก้ไข</span>`;
   const inp=document.getElementById("qa_amount");
   if(inp){inp.value="";inp.focus();}
+}
+
+function editMonthTotal(el,month){
+  const cur=expenses.find(e=>e.month===month)?.total||0;
+  const inp=document.createElement("input");
+  inp.type="number";inp.value=cur;inp.min=0;
+  inp.style.cssText=`background:#071020;border:1px solid #38bdf8;border-radius:6px;padding:3px 8px;color:#f0f9ff;font-size:13px;font-family:'DM Mono',monospace;width:110px;text-align:right;outline:none;font-weight:600;`;
+  el.replaceWith(inp);inp.focus();inp.select();
+  const commit=()=>{
+    const n=Math.max(0,+inp.value||0);
+    expenses=expenses.map(e=>e.month!==month?e:{...e,total:n});
+    persist();render();
+  };
+  inp.addEventListener("blur",commit);
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")commit();if(e.key==="Escape")render();});
 }
 
 function goAdmin(tab){page="admin";if(!adminAuthed){render();return;}atab=tab;render();window.scrollTo({top:0,behavior:"smooth"});}
@@ -745,25 +709,6 @@ function editDocPrice(el,id){
   const commit=()=>{
     const n=Math.max(0,+inp.value||0);
     docs=docs.map(d=>d.id===id?{...d,price:n}:d);
-    persist();render();
-  };
-  inp.addEventListener("blur",commit);
-  inp.addEventListener("keydown",e=>{if(e.key==="Enter")commit();if(e.key==="Escape")render();});
-}
-
-function editNum(el,month,dept){
-  const cur=(expenses.find(e=>e.month===month)?.departments?.[dept])||0;
-  const inp=document.createElement("input");
-  inp.type="number";inp.value=cur;inp.min=0;
-  inp.style.cssText=`background:#071020;border:1px solid #38bdf8;border-radius:6px;padding:2px 6px;color:#f0f9ff;font-size:10px;font-family:'DM Mono',monospace;width:72px;text-align:right;outline:none;`;
-  el.replaceWith(inp);inp.focus();inp.select();
-  const commit=()=>{
-    const n=Math.max(0,+inp.value||0);
-    expenses=expenses.map(e=>{
-      if(e.month!==month)return e;
-      const nd={...e.departments,[dept]:n};
-      return{...e,departments:nd,total:Object.values(nd).reduce((s,v)=>s+(+v||0),0)};
-    });
     persist();render();
   };
   inp.addEventListener("blur",commit);
