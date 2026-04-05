@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ระบบจัดการไปรษณีย์</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#f3f7fb;font-family:'Sarabun',sans-serif;color:#1e293b;min-height:100vh;}
+::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:#e2e8f0;}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}
+.card{transition:transform .25s,box-shadow .25s;background:#ffffff;border:1px solid #e2e8f0;box-shadow:0 10px 28px rgba(15,23,42,.06);}.card:hover{transform:translateY(-3px);box-shadow:0 16px 32px rgba(59,130,246,.14)!important;}
+.btn{cursor:pointer;font-family:'Sarabun',sans-serif;transition:filter .2s,transform .1s;border:none;}.btn:hover{filter:brightness(1.2);}.btn:active{transform:scale(.97);}
+.row-tr{transition:background .15s;}.row-tr:hover{background:rgba(59,130,246,.06)!important;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}.fade-up{animation:fadeUp .35s ease both;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}.pulse-dot{animation:pulse 2s infinite;}
+input,select{outline:none;font-family:'Sarabun',sans-serif;}input:focus,select:focus{border-color:#38bdf8!important;}
+.modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.18);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:200;padding:16px;}
+.modal-box{background:#ffffff;border:1px solid #dbe5f0;border-radius:20px;padding:28px;width:500px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 22px 60px rgba(15,23,42,.12);}
+.edit-span{cursor:text;border-bottom:1px dashed #94a3b8;padding:2px 5px;border-radius:4px;transition:background .15s;display:inline-block;}
+.edit-span:hover{background:rgba(59,130,246,.10);}
+.dept-tag{display:inline-flex;align-items:center;gap:5px;border-radius:99px;padding:3px 10px;font-size:11px;font-weight:600;}
+
+body.exporting .noexport{display:none!important;}
+body.exporting .card{transition:none!important;}
+body.exporting .card:hover{transform:none!important;box-shadow:none!important;}
+body.exporting .row-tr:hover{background:transparent!important;}
+body.exporting #dashboardRoot{max-width:1400px!important;}
+body.exporting canvas{image-rendering:auto;}
+body.exporting .fade-up{animation:none!important;opacity:1!important;transform:none!important;}
+body.exporting .pulse-dot{animation:none!important;}
+body.exporting *{transition:none!important;}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const LIMIT=3000;
+const MONTHS_S=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+const MONTHS_F=["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
+const DEPTS=["ฝ่ายผลิต","ฝ่ายบำรุงรักษา","ฝ่ายส่งเสริมและจัดหาเชื้อเพลิง","ฝ่ายวิศวกรรมโครงการ","แผนกสำนักงานและบริหารคุณภาพ","แผนกทรัพยากรบุคคล","แผนกวิศวกรรม","แผนกอาชีวอนามัย ความปลอดภัย และสิ่งแวดล้อม","แผนกบัญชี"];
+const DEPT_COLORS=["#0ea5e9","#22d3ee","#a78bfa","#f472b6","#fb923c","#34d399","#fbbf24","#f87171","#818cf8"];
+const TYPES=["จดหมาย","พัสดุ","เอกสาร","ใบแจ้งหนี้","สัญญา","อื่นๆ"];
+const ADMIN_PASS="admin0541";
+const now=new Date();
+const CUR_M=now.getMonth();
+const CUR_Y=now.getFullYear();
+const fmt=n=>(Math.round(+n||0)).toLocaleString("th-TH");
+const fmtDec=n=>(+(+n||0).toFixed(2)).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
+const deptColor=d=>DEPT_COLORS[DEPTS.indexOf(d)]||"#64748b";
+const deptShort=d=>d.replace("ฝ่าย","").replace("แผนก","");
+
+/* STATE */
+let page="dashboard",adminAuthed=false,adminPass="",adminErr=false,atab="expenses";
+let addDocOpen=false,saveMsg="",saveMsgTimer=null,filterDept="";
+let expenses=null,docs=null,loading=true;
+let newDoc={date:now.toISOString().split("T")[0],sender:"",recipient:"",type:TYPES[0],tracking:"",price:0};
+
+/* STORAGE */
+function loadData(){
+  try{
+    const er=localStorage.getItem("exp_v4");const dr=localStorage.getItem("doc_v5");
+    expenses=er?JSON.parse(er):initExpenses();
+    // migrate old docs (add price field if missing)
+    const rawDocs=dr?JSON.parse(dr):null;
+    if(rawDocs){
+      docs=rawDocs.map(d=>({price:0,...d}));
+    } else {
+      docs=initDocs();
+    }
+  }catch{expenses=initExpenses();docs=initDocs();}
+  loading=false;render();
+}
+function persist(){
+  try{
+    localStorage.setItem("exp_v4",JSON.stringify(expenses));
+    localStorage.setItem("doc_v5",JSON.stringify(docs));
+    showSave("✓ บันทึกแล้ว");
+  }catch{showSave("เกิดข้อผิดพลาด");}
+}
+function showSave(msg){saveMsg=msg;if(saveMsgTimer)clearTimeout(saveMsgTimer);saveMsgTimer=setTimeout(()=>{saveMsg="";render();},2200);render();}
+function initExpenses(){return Array.from({length:12},(_,i)=>({month:i,total:i<CUR_M?Math.floor(Math.random()*2600+200):(i===CUR_M?1250:0),departments:Object.fromEntries(DEPTS.map(d=>[d,i<CUR_M?Math.floor(Math.random()*320):(i===CUR_M?Math.floor(Math.random()*145):0)]))}));}
+function initDocs(){const m=String(CUR_M+1).padStart(2,"0");return[
+  {id:"d1",date:`${CUR_Y}-${m}-05`,sender:"ฝ่ายผลิต",recipient:"กรมสรรพากร",type:"เอกสารราชการ",tracking:"EF123456789TH",price:35},
+  {id:"d2",date:`${CUR_Y}-${m}-10`,sender:"แผนกทรัพยากรบุคคล",recipient:"บริษัท ABC จำกัด",type:"สัญญา",tracking:"RH987654321TH",price:120},
+  {id:"d3",date:`${CUR_Y}-${m}-14`,sender:"ฝ่ายวิศวกรรมโครงการ",recipient:"ลูกค้า XYZ",type:"ใบแจ้งหนี้",tracking:"PC456123789TH",price:85},
+  {id:"d4",date:`${CUR_Y}-${m}-18`,sender:"แผนกบัญชี",recipient:"สำนักงานบัญชีกลาง",type:"จดหมาย",tracking:"RL112233445TH",price:25}
+];}
+
+/* DERIVED */
+function derived(){
+  const curExp=expenses?.find(e=>e.month===CUR_M)||{total:0,departments:{}};
+  const yearTotal=expenses?.reduce((s,e)=>s+(e.total||0),0)||0;
+  const docsMonth=docs?.filter(d=>{const dd=new Date(d.date);return dd.getMonth()===CUR_M&&dd.getFullYear()===CUR_Y;})||[];
+  const docsYear=docs?.filter(d=>new Date(d.date).getFullYear()===CUR_Y)||[];
+  const limitPct=Math.min((curExp.total/LIMIT)*100,100);
+  const over=curExp.total>LIMIT;
+  // price stats
+  const priceMonth=docsMonth.reduce((s,d)=>s+(+d.price||0),0);
+  const priceYear=docsYear.reduce((s,d)=>s+(+d.price||0),0);
+  return{curExp,yearTotal,docsMonth,docsYear,limitPct,over,priceMonth,priceYear};
+}
+
+/* EXPORT */
+function exportCSV(){
+  const rows=[["วันที่","ผู้ส่ง","ผู้รับ","ประเภท","Tracking Number","ราคา (บาท)"]];
+  (docs||[]).forEach(d=>rows.push([d.date,d.sender,d.recipient,d.type,d.tracking,(+d.price||0).toFixed(2)]));
+  const csv="\uFEFF"+rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+  dl(new Blob([csv],{type:"text/csv;charset=utf-8"}),`documents_${CUR_Y}.csv`);
+}
+function dl(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();}
+
+async function exportImage(){
+  if(page!=="dashboard"){setPage("dashboard");await new Promise(r=>setTimeout(r,120));}
+  await (document.fonts?.ready || Promise.resolve());
+  const root=document.getElementById("dashboardRoot");
+  if(!root){alert("ไม่พบส่วน Dashboard สำหรับ Export");return;}
+  document.body.classList.add("exporting");
+  try{
+    try{drawChart();}catch(e){}
+    await new Promise(r=>requestAnimationFrame(()=>r()));
+    await new Promise(r=>setTimeout(r,180));
+    const canvas=await html2canvas(root,{backgroundColor:"#f3f7fb",scale:2,useCORS:true,logging:false,windowWidth:1400,scrollX:0,scrollY:0});
+    canvas.toBlob(blob=>dl(blob,`dashboard_${CUR_Y}.png`),"image/png");
+  }catch(err){alert("Export PNG ไม่สำเร็จ: "+(err?.message||err));}
+  finally{document.body.classList.remove("exporting");}
+}
+
+/* RENDER */
+function render(){
+  const app=document.getElementById("app");
+  if(loading){app.innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#38bdf8;font-size:18px;">กำลังโหลด…</div>`;return;}
+  const{curExp,yearTotal,docsMonth,docsYear,limitPct,over,priceMonth,priceYear}=derived();
+  app.innerHTML=`
+  <div style="background:rgba(255,255,255,.94);border-bottom:1px solid #e2e8f0;backdrop-filter:blur(10px);position:sticky;top:0;z-index:50;">
+    <div style="max-width:1320px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:56px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#0ea5e9,#6366f1);display:flex;align-items:center;justify-content:center;font-size:15px;">📊</div>
+        <span style="font-family:'DM Mono',monospace;font-weight:500;font-size:13px;color:#0f172a;letter-spacing:1.5px;">📮 ระบบจัดการไปรษณีย์</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${saveMsg?`<span style="font-size:12px;color:#34d399;font-weight:600;">${saveMsg}</span>`:""}
+        <button class="btn" onclick="setPage('dashboard')" style="background:${page==="dashboard"?"#0ea5e9":"transparent"};border:1px solid ${page==="dashboard"?"#0ea5e9":"#1e3a5f"};border-radius:8px;padding:5px 14px;color:${page==="dashboard"?"#fff":"#64748b"};font-size:13px;">🏠 Dashboard</button>
+        <button class="btn" onclick="setPage('admin')" style="background:${page==="admin"?"#0ea5e9":"transparent"};border:1px solid ${page==="admin"?"#0ea5e9":"#1e3a5f"};border-radius:8px;padding:5px 14px;color:${page==="admin"?"#fff":"#64748b"};font-size:13px;">🔐 Admin</button>
+      </div>
+    </div>
+  </div>
+  ${page==="dashboard"?renderDashboard(curExp,yearTotal,docsMonth,docsYear,limitPct,over,priceMonth,priceYear):""}
+  ${page==="admin"&&!adminAuthed?renderLogin():""}
+  ${page==="admin"&&adminAuthed?renderAdmin(curExp,yearTotal,docsMonth,docsYear):""}`;
+  if(page==="dashboard") requestAnimationFrame(()=>drawChart());
+}
+
+/* DASHBOARD */
+function renderDashboard(curExp,yearTotal,docsMonth,docsYear,limitPct,over,priceMonth,priceYear){
+  const filteredDocs=(filterDept==="__blank__"?[...(docs||[])].filter(d=>!d.sender||d.sender===""):filterDept?[...(docs||[])].filter(d=>d.sender===filterDept):[...(docs||[])]).sort((a,b)=>b.date.localeCompare(a.date));
+  const maxDocCnt=Math.max(...DEPTS.map(d=>(docs||[]).filter(x=>x.sender===d).length),1);
+  const totalPriceAll=(docs||[]).reduce((s,d)=>s+(+d.price||0),0);
+  return `<div id="dashboardRoot" style="max-width:1320px;margin:0 auto;padding:22px 20px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg,#dbeafe,#e0f2fe);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px rgba(14,165,233,.14);font-size:26px;border:1px solid #bae6fd;flex-shrink:0;">📮</div>
+      <div>
+        <div style="font-size:24px;font-weight:700;letter-spacing:.2px;color:#0f172a;line-height:1.1;">ระบบจัดการไปรษณีย์</div>
+        <div style="font-size:11px;color:#64748b;margin-top:6px;">สรุปข้อมูล ${now.toLocaleDateString("th-TH")} · ปี ${CUR_Y}</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:#64748b;background:#ffffff;border:1px solid #e2e8f0;border-radius:999px;padding:8px 12px;box-shadow:0 4px 12px rgba(15,23,42,.05);">
+      วงเงิน/เดือน: ฿${fmt(LIMIT)}
+    </div>
+  </div>
+
+  <!-- STAT CARDS -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:13px;margin-bottom:18px;">
+  ${[
+    {icon:"💸",label:"ค่าใช้จ่ายเดือนนี้",val:`฿${fmt(curExp.total)}`,sub:`วงเงิน ฿${fmt(LIMIT)}/เดือน`,accent:over?"#ef4444":"#34d399",pulse:over,action:"goAdmin('expenses')",tip:"คลิกเพื่อแก้ไขค่าใช้จ่าย"},
+    {icon:"📅",label:`รวมทั้งปี ${CUR_Y}`,val:`฿${fmt(yearTotal)}`,sub:"สะสมตลอดปี",accent:"#818cf8",action:"goAdmin('expenses')",tip:"คลิกดูรายละเอียดทั้งปี"},
+    {icon:"📨",label:"ส่งเดือนนี้",val:`${docsMonth.length} รายการ`,sub:`฿${fmtDec(priceMonth)} รวมค่าส่ง`,accent:"#fb923c",action:"scrollToId('docTable')",tip:"คลิกดูรายการส่งเอกสาร"},
+    {icon:"📬",label:"ส่งสะสมทั้งปี",val:`${docsYear.length} รายการ`,sub:`฿${fmtDec(priceYear)} รวมค่าส่ง`,accent:"#f472b6",action:"scrollToId('docTable')",tip:"คลิกดูรายการส่งเอกสาร"},
+    {icon:"🧾",label:"ค่าส่งทั้งหมด",val:`฿${fmtDec(totalPriceAll)}`,sub:"รวมทุกรายการ",accent:"#fbbf24",action:"scrollToId('docTable')",tip:"คลิกดูรายการส่งเอกสาร"},
+  ].map((c,i)=>`
+  <div class="card fade-up" onclick="${c.action}" title="${c.tip}"
+    style="animation-delay:${i*.07}s;background:#ffffff;border:1px solid ${c.accent}28;border-radius:14px;padding:18px;cursor:pointer;position:relative;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+      <span style="font-size:24px;">${c.icon}</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:9px;color:${c.accent};opacity:.7;">${c.tip}</span>
+        <div style="width:8px;height:8px;border-radius:50%;background:${c.accent};box-shadow:0 0 10px ${c.accent}aa;"${c.pulse?' class="pulse-dot"':""}></div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:#64748b;margin-bottom:3px;letter-spacing:.5px;">${c.label.toUpperCase()}</div>
+    <div style="font-size:21px;font-family:'DM Mono',monospace;font-weight:500;color:#0f172a;line-height:1.1;">${c.val}</div>
+    <div style="font-size:11px;color:${c.accent};margin-top:5px;">${c.sub}</div>
+  </div>`).join("")}
+  </div>
+
+  <!-- GAUGE -->
+  <div class="fade-up" style="animation-delay:.28s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px;margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div><div style="font-size:14px;font-weight:600;color:#0f172a;">งบประมาณ ${MONTHS_F[CUR_M]} ${CUR_Y}</div><div style="font-size:11px;color:#64748b;margin-top:1px;">วงเงินสูงสุด ฿${fmt(LIMIT)} / เดือน</div></div>
+      <div style="font-family:'DM Mono',monospace;font-size:24px;font-weight:500;color:${over?"#ef4444":"#34d399"};">${limitPct.toFixed(1)}%</div>
+    </div>
+    <div style="height:12px;background:#e2e8f0;border-radius:99px;overflow:hidden;"><div style="height:100%;width:${limitPct}%;background:${over?"linear-gradient(90deg,#ef4444,#fca5a5)":"linear-gradient(90deg,#0ea5e9,#34d399)"};border-radius:99px;transition:width .8s;"></div></div>
+    ${over?`<div style="margin-top:8px;font-size:12px;color:#fca5a5;">⚠️ เกินวงเงิน ฿${fmt(curExp.total-LIMIT)} บาท</div>`:""}
+    <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:#64748b;"><span>ใช้ไป ฿${fmt(curExp.total)}</span><span>คงเหลือ ฿${fmt(Math.max(0,LIMIT-curExp.total))}</span></div>
+  </div>
+
+  <!-- 3 CHARTS ROW -->
+  <div style="display:grid;grid-template-columns:5fr 3fr 3fr;gap:14px;margin-bottom:18px;">
+    <div class="fade-up" style="animation-delay:.35s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;overflow:hidden;">
+      <canvas id="mainChart" style="width:100%;display:block;border-radius:6px;"></canvas>
+    </div>
+    <div class="fade-up" style="animation-delay:.42s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px;">
+      <div style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">💰 ค่าใช้จ่ายแผนก</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${DEPTS.map((d,i)=>{
+          const amt=curExp.departments?.[d]||0;
+          const pct=curExp.total>0?Math.round(amt/curExp.total*100):0;
+          const c=DEPT_COLORS[i];
+          return `<div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px;">
+              <span style="color:${c};font-weight:600;">${deptShort(d)}</span>
+              <span style="font-family:'DM Mono',monospace;color:#64748b;">฿${fmt(amt)}</span>
+            </div>
+            <div style="height:5px;background:#e2e8f0;border-radius:99px;"><div style="height:100%;width:${pct}%;background:${c};border-radius:99px;transition:width .6s;"></div></div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+    <div class="fade-up" style="animation-delay:.49s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px;">
+      <div style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">📦 เอกสารแยกตามฝ่าย</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${DEPTS.map((d,i)=>{
+          const cnt=(docs||[]).filter(x=>x.sender===d).length;
+          if(!cnt)return`<div style="display:flex;justify-content:space-between;font-size:10px;"><span style="color:#64748b;">${deptShort(d)}</span><span style="color:#64748b;">0</span></div>`;
+          const pct=Math.round(cnt/maxDocCnt*100);const c=DEPT_COLORS[i];
+          return `<div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px;">
+              <span style="color:${c};font-weight:600;">${deptShort(d)}</span>
+              <span style="font-family:'DM Mono',monospace;color:#64748b;">${cnt}</span>
+            </div>
+            <div style="height:5px;background:#e2e8f0;border-radius:99px;"><div style="height:100%;width:${pct}%;background:${c};border-radius:99px;"></div></div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+  </div>
+
+  <!-- DOCS TABLE -->
+  <div id="docTable" class="fade-up" style="animation-delay:.56s;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+    <div style="padding:14px 18px;border-bottom:1px solid #0f2040;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div style="font-size:14px;font-weight:600;color:#0f172a;">📬 รายการส่งไปรษณีย์</div>
+        <div style="font-size:11px;color:#64748b;margin-top:1px;">เดือนนี้ ${docsMonth.length} รายการ (฿${fmtDec(priceMonth)}) · ทั้งปี ${docsYear.length} รายการ (฿${fmtDec(priceYear)})</div>
+      </div>
+      <div class="noexport" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <select onchange="filterDept=this.value;render()" style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:7px 10px;color:#0f172a;font-size:12px;min-width:150px;">
+          <option value="">🔎 ทุกฝ่าย</option>
+          ${DEPTS.map(d=>`<option value="${d}" ${filterDept===d?"selected":""}>${d}</option>`).join("")}
+          <option value="__blank__" ${filterDept==="__blank__"?"selected":""}>— ไม่ระบุแผนก —</option>
+        </select>
+        <button class="btn" onclick="exportCSV()" style="background:#064e3b;border:1px solid #065f46;border-radius:8px;padding:7px 12px;color:#34d399;font-size:12px;font-weight:600;">⬇ CSV</button>
+        <button class="btn" onclick="exportImage()" style="background:#1e1b4b;border:1px solid #312e81;border-radius:8px;padding:7px 12px;color:#818cf8;font-size:12px;font-weight:600;">🖼 PNG</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f8fafc;">
+          ${["วันที่","ผู้ส่ง","ผู้รับ","ประเภท","TRACKING NUMBER","ราคา (บาท)"].map(h=>`<th style="padding:9px 14px;text-align:left;color:#64748b;font-weight:500;font-size:10px;letter-spacing:.5px;white-space:nowrap;">${h}</th>`).join("")}
+        </tr></thead>
+        <tbody>
+        ${filteredDocs.length===0?`<tr><td colspan="6" style="padding:36px;text-align:center;color:#1e3a5f;">ไม่พบรายการ</td></tr>`
+        :filteredDocs.map(d=>{
+          const dd=new Date(d.date);const isM=dd.getMonth()===CUR_M&&dd.getFullYear()===CUR_Y;const c=deptColor(d.sender);
+          return`<tr class="row-tr" style="border-top:1px solid #0b1a2e;">
+            <td style="padding:9px 14px;font-family:'DM Mono',monospace;font-size:10px;color:${isM?"#38bdf8":"#475569"};white-space:nowrap;">
+              ${dd.toLocaleDateString("th-TH",{day:"2-digit",month:"short",year:"2-digit"})}${isM?`<span style="margin-left:4px;font-size:8px;background:#dbeafe;color:#38bdf8;padding:1px 5px;border-radius:99px;">ล่าสุด</span>`:""}
+            </td>
+            <td style="padding:9px 14px;">
+              <span class="dept-tag" style="background:${c}18;color:${c};border:1px solid ${c}44;">
+                <span style="width:6px;height:6px;border-radius:50%;background:${c};flex-shrink:0;display:inline-block;"></span>${d.sender||"—"}
+              </span>
+            </td>
+            <td style="padding:9px 14px;color:#64748b;">${d.recipient}</td>
+            <td style="padding:9px 14px;"><span style="background:#eff6ff;color:#818cf8;border-radius:99px;padding:2px 9px;font-size:11px;border:1px solid #dbe5f0;">${d.type}</span></td>
+            <td style="padding:9px 14px;font-family:'DM Mono',monospace;font-size:11px;color:#fb923c;letter-spacing:1px;">${d.tracking}</td>
+            <td style="padding:9px 14px;">
+              <span style="font-family:'DM Mono',monospace;font-size:12px;font-weight:600;color:${(+d.price||0)>0?"#34d399":"#475569"};">
+                ${(+d.price||0)>0?"฿"+fmtDec(+d.price):"—"}
+              </span>
+            </td>
+          </tr>`;
+        }).join("")}
+        </tbody>
+        ${filteredDocs.length>0?`
+        <tfoot>
+          <tr style="background:#f8fafc;border-top:2px solid #e2e8f0;">
+            <td colspan="5" style="padding:9px 14px;font-size:11px;color:#64748b;font-weight:600;">รวมค่าส่ง (${filteredDocs.length} รายการ)</td>
+            <td style="padding:9px 14px;font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:#fbbf24;">
+              ฿${fmtDec(filteredDocs.reduce((s,d)=>s+(+d.price||0),0))}
+            </td>
+          </tr>
+        </tfoot>`:""}
+      </table>
+    </div>
+  </div>
+  </div>`;
+}
+
+/* LOGIN */
+function renderLogin(){
+  return`<div style="display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 56px);">
+  <div class="fade-up" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:40px;width:340px;max-width:90vw;text-align:center;">
+    <div style="font-size:36px;margin-bottom:10px;">🔐</div>
+    <div style="font-size:19px;font-weight:700;color:#0f172a;margin-bottom:4px;">Admin Panel</div>
+    <div style="font-size:12px;color:#64748b;margin-bottom:24px;">กรุณาใส่รหัสผ่าน</div>
+    <input type="password" id="apIn" placeholder="รหัสผ่าน" value="${adminPass}"
+      oninput="adminPass=this.value;adminErr=false;"
+      onkeydown="if(event.key==='Enter')tryLogin()"
+      style="width:100%;background:#f8fafc;border:1px solid ${adminErr?"#ef4444":"#1e3a5f"};border-radius:10px;padding:12px;color:#0f172a;font-size:14px;text-align:center;letter-spacing:4px;margin-bottom:8px;"/>
+    ${adminErr?`<div style="color:#fca5a5;font-size:12px;margin-bottom:8px;">รหัสผ่านไม่ถูกต้อง</div>`:""}
+    <button class="btn" onclick="tryLogin()" style="width:100%;background:linear-gradient(135deg,#0ea5e9,#6366f1);border-radius:10px;padding:13px;color:#fff;font-weight:700;font-size:15px;">เข้าสู่ระบบ</button>
+  </div>
+  </div>`;
+}
+
+/* ADMIN */
+function renderAdmin(curExp,yearTotal,docsMonth,docsYear){
+  const sortedDocs=[...(docs||[])].sort((a,b)=>b.date.localeCompare(a.date));
+  return`<div style="max-width:1320px;margin:0 auto;padding:22px 20px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+    <div>
+      <div style="font-size:19px;font-weight:700;color:#0f172a;">🔧 Admin Panel</div>
+      <div style="font-size:11px;color:#64748b;margin-top:1px;">คลิกที่ข้อความ / ตัวเลข เพื่อแก้ไขได้ทันที</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      ${saveMsg?`<span style="font-size:12px;color:#34d399;font-weight:600;">${saveMsg}</span>`:""}
+      <button class="btn" onclick="exportCSV()" style="background:#064e3b;border:1px solid #065f46;border-radius:8px;padding:7px 12px;color:#34d399;font-size:12px;font-weight:600;">⬇ CSV</button>
+      <button class="btn" onclick="exportImage()" style="background:#1e1b4b;border:1px solid #312e81;border-radius:8px;padding:7px 12px;color:#818cf8;font-size:12px;font-weight:600;">🖼 PNG</button>
+    </div>
+  </div>
+  <div style="display:flex;gap:4px;margin-bottom:18px;background:#f8fafc;border-radius:12px;padding:4px;width:fit-content;">
+    <button class="btn" onclick="setAtab('expenses')" style="background:${atab==="expenses"?"#0ea5e9":"transparent"};border-radius:9px;padding:8px 18px;color:${atab==="expenses"?"#fff":"#64748b"};font-weight:600;font-size:13px;">💰 ค่าใช้จ่าย</button>
+    <button class="btn" onclick="setAtab('documents')" style="background:${atab==="documents"?"#0ea5e9":"transparent"};border-radius:9px;padding:8px 18px;color:${atab==="documents"?"#fff":"#64748b"};font-weight:600;font-size:13px;">📦 เอกสาร/ไปรษณีย์</button>
+  </div>
+  ${atab==="expenses"?renderAdminExpenses(curExp,yearTotal):""}
+  ${atab==="documents"?renderAdminDocs(sortedDocs,docsMonth,docsYear):""}
+  ${addDocOpen?renderAddDocModal():""}
+  </div>`;
+}
+
+function renderAdminExpenses(curExp,yearTotal){
+  return`<div class="fade-up">
+  <div style="background:linear-gradient(135deg,#0c1e38,#0b1526);border:1px solid #dbe5f0;border-radius:14px;padding:20px;margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:700;color:#38bdf8;margin-bottom:4px;">⚡ เพิ่ม / แก้ไข ค่าใช้จ่าย</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:16px;">เลือกเดือน → ใส่จำนวนเงิน → กด + &nbsp;·&nbsp; <span style="color:#fbbf24;">ถ้าใส่ผิด กรอกตัวเลขใหม่แล้วกด + อีกครั้งได้เลย</span></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div>
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">เดือน</div>
+        <select id="qa_month" style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 12px;color:#0f172a;font-size:12px;min-width:90px;">
+          ${MONTHS_S.map((m,i)=>`<option value="${i}" ${i===CUR_M?"selected":""}>${m}</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">แผนก</div>
+        <select id="qa_dept" style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 12px;color:#0f172a;font-size:12px;min-width:180px;">
+          <option value="">— ไม่ระบุแผนก —</option>
+          ${DEPTS.map((d,i)=>`<option value="${d}" style="color:${DEPT_COLORS[i]}">${d}</option>`).join("")}
+        </select>
+      </div>
+      <div style="flex:1;min-width:120px;">
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">จำนวนเงิน (บาท)</div>
+        <input type="number" id="qa_amount" min="0" placeholder="0"
+          onkeydown="if(event.key==='Enter')quickAddExpense()"
+          style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 12px;color:#34d399;font-family:'DM Mono',monospace;font-size:14px;font-weight:600;"
+          onfocus="this.style.borderColor='#38bdf8'" onblur="this.style.borderColor='#1e3a5f'"/>
+      </div>
+      <button class="btn" onclick="quickAddExpense()"
+        style="background:linear-gradient(135deg,#0ea5e9,#6366f1);border-radius:10px;padding:9px 22px;color:#fff;font-weight:700;font-size:16px;white-space:nowrap;align-self:flex-end;">
+        + เพิ่ม
+      </button>
+    </div>
+    <div id="qa_msg" style="margin-top:10px;font-size:12px;min-height:16px;"></div>
+  </div>
+  <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+    <div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;">
+      <div style="font-size:10px;color:#64748b;">เดือนนี้</div>
+      <div style="font-family:'DM Mono',monospace;font-size:17px;color:${curExp.total>LIMIT?"#fca5a5":"#34d399"};">฿${fmt(curExp.total)}</div>
+    </div>
+    <div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;">
+      <div style="font-size:10px;color:#64748b;">รวมทั้งปี</div>
+      <div style="font-family:'DM Mono',monospace;font-size:17px;color:#818cf8;">฿${fmt(yearTotal)}</div>
+    </div>
+  </div>
+  <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:9px 12px;text-align:left;color:#64748b;font-size:10px;min-width:70px;">เดือน</th>
+          ${DEPTS.map((d,i)=>`<th style="padding:9px 7px;text-align:right;color:${DEPT_COLORS[i]};font-size:9px;min-width:75px;">${deptShort(d)}</th>`).join("")}
+          <th style="padding:9px 7px;text-align:right;color:#64748b;font-size:9px;min-width:75px;">ไม่ระบุ</th>
+          <th style="padding:9px 12px;text-align:right;color:#64748b;font-size:10px;min-width:75px;">รวม</th>
+          <th style="padding:9px 8px;text-align:center;color:#64748b;font-size:10px;">สถานะ</th>
+          <th style="padding:9px 8px;text-align:center;color:#64748b;font-size:10px;"></th>
+        </tr></thead>
+        <tbody>
+        ${(expenses||[]).map(e=>`
+        <tr class="row-tr" style="border-top:1px solid #0b1a2e;background:${e.month===CUR_M?"rgba(56,189,248,.04)":"transparent"}">
+          <td style="padding:8px 12px;color:${e.month===CUR_M?"#38bdf8":"#64748b"};font-weight:${e.month===CUR_M?600:400};white-space:nowrap;">
+            ${MONTHS_S[e.month]}${e.month===CUR_M?` <span style="font-size:8px;color:#0ea5e9;">●</span>`:""}
+          </td>
+          ${DEPTS.map((d,i)=>`
+          <td style="padding:8px 5px;text-align:right;">
+            <span onclick="editNum(this,${e.month},'${d}')"
+              style="font-family:'DM Mono',monospace;font-size:10px;color:${DEPT_COLORS[i]};cursor:text;border-bottom:1px dashed #334155;padding:1px 4px;border-radius:3px;"
+              onmouseover="this.style.background='rgba(56,189,248,.1)'" onmouseout="this.style.background='transparent'">
+              ${fmt(e.departments?.[d]||0)}
+            </span>
+          </td>`).join("")}
+          <td style="padding:8px 5px;text-align:right;">
+            <span onclick="editNum(this,${e.month},'__unspecified__')"
+              style="font-family:'DM Mono',monospace;font-size:10px;color:#64748b;cursor:text;border-bottom:1px dashed #334155;padding:1px 4px;border-radius:3px;"
+              onmouseover="this.style.background='rgba(56,189,248,.1)'" onmouseout="this.style.background='transparent'">
+              ${fmt(e.departments?.['__unspecified__']||0)}
+            </span>
+          </td>
+          <td style="padding:8px 12px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;font-size:11px;color:${e.total>LIMIT?"#fca5a5":"#f1f5f9"};">${e.total>0?`฿${fmt(e.total)}`:"–"}</td>
+          <td style="padding:8px 8px;text-align:center;">
+            ${e.total>LIMIT?`<span style="background:#450a0a;color:#fca5a5;border-radius:99px;padding:2px 8px;font-size:9px;">เกินงบ</span>`
+            :e.total>0?`<span style="background:#022c22;color:#34d399;border-radius:99px;padding:2px 8px;font-size:9px;">ปกติ</span>`
+            :`<span style="color:#64748b;font-size:10px;">–</span>`}
+          </td>
+          <td style="padding:8px 8px;text-align:center;">
+            ${e.total>0?`<button class="btn" onclick="resetMonthExpense(${e.month})" style="background:#1a0a0a;border:1px solid #450a0a;border-radius:6px;padding:2px 8px;color:#fca5a5;font-size:10px;">รีเซ็ต</button>`:""}
+          </td>
+        </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  </div>`;
+}
+
+function renderAdminDocs(sortedDocs,docsMonth,docsYear){
+  const totalPriceShown=sortedDocs.reduce((s,d)=>s+(+d.price||0),0);
+  return`<div class="fade-up">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div style="font-size:11px;color:#64748b;">
+      📝 คลิกข้อความเพื่อแก้ไข · เดือนนี้ ${docsMonth.length} · ทั้งปี ${docsYear.length} รายการ
+      · <span style="color:#fbbf24;font-weight:600;">ค่าส่งรวม ฿${fmtDec(totalPriceShown)}</span>
+    </div>
+    <button class="btn" onclick="openAddDoc()" style="background:#0284c7;border-radius:10px;padding:9px 18px;color:#fff;font-weight:700;font-size:13px;">+ เพิ่มรายการส่งไปรษณีย์</button>
+  </div>
+  <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f8fafc;">
+          ${["วันที่","ผู้ส่ง","ผู้รับ","ประเภท","TRACKING","ราคา (บาท)",""].map(h=>`<th style="padding:9px 12px;text-align:left;color:#64748b;font-weight:500;font-size:10px;letter-spacing:.5px;">${h}</th>`).join("")}
+        </tr></thead>
+        <tbody>
+        ${sortedDocs.length===0?`<tr><td colspan="7" style="padding:36px;text-align:center;color:#1e3a5f;">ยังไม่มีรายการ</td></tr>`
+        :sortedDocs.map(d=>{
+          const dd=new Date(d.date);const isM=dd.getMonth()===CUR_M&&dd.getFullYear()===CUR_Y;const c=deptColor(d.sender);
+          return`<tr class="row-tr" style="border-top:1px solid #0b1a2e;">
+            <td style="padding:9px 12px;">
+              <span class="edit-span" onclick="editDocField(this,'${d.id}','date')" style="font-family:'DM Mono',monospace;font-size:10px;color:${isM?"#38bdf8":"#475569"};">${d.date}</span>
+            </td>
+            <td style="padding:9px 12px;">
+              <select onchange="updateDocField('${d.id}','sender',this.value)" style="background:#f8fafc;border:1px solid #dbe5f0;border-radius:6px;padding:3px 8px;color:${c};font-size:11px;max-width:170px;">
+                <option value="">— ไม่ระบุ —</option>
+                ${DEPTS.map(dep=>`<option value="${dep}" ${d.sender===dep?"selected":""}>${dep}</option>`).join("")}
+              </select>
+            </td>
+            <td style="padding:9px 12px;"><span class="edit-span" onclick="editDocField(this,'${d.id}','recipient')" style="color:#64748b;">${d.recipient}</span></td>
+            <td style="padding:9px 12px;">
+              <select onchange="updateDocField('${d.id}','type',this.value)" style="background:#eff6ff;border:1px solid #dbe5f0;border-radius:99px;padding:3px 9px;color:#818cf8;font-size:11px;">
+                ${TYPES.map(t=>`<option value="${t}" ${d.type===t?"selected":""}>${t}</option>`).join("")}
+              </select>
+            </td>
+            <td style="padding:9px 12px;"><span class="edit-span" onclick="editDocField(this,'${d.id}','tracking')" style="font-family:'DM Mono',monospace;font-size:11px;color:#fb923c;letter-spacing:1px;">${d.tracking}</span></td>
+            <td style="padding:9px 12px;">
+              <span class="edit-span" onclick="editDocPrice(this,'${d.id}')"
+                style="font-family:'DM Mono',monospace;font-size:12px;font-weight:600;color:${(+d.price||0)>0?"#34d399":"#64748b"};">
+                ${(+d.price||0)>0?"฿"+fmtDec(+d.price):"฿0.00"}
+              </span>
+            </td>
+            <td style="padding:9px 12px;"><button class="btn" onclick="deleteDoc('${d.id}')" style="background:#1a0a0a;border:1px solid #450a0a;border-radius:6px;padding:3px 10px;color:#fca5a5;font-size:11px;">ลบ</button></td>
+          </tr>`;
+        }).join("")}
+        </tbody>
+        ${sortedDocs.length>0?`
+        <tfoot>
+          <tr style="background:#f8fafc;border-top:2px solid #e2e8f0;">
+            <td colspan="5" style="padding:9px 12px;font-size:11px;color:#64748b;font-weight:600;">รวมค่าส่งทั้งหมด (${sortedDocs.length} รายการ)</td>
+            <td colspan="2" style="padding:9px 12px;font-family:'DM Mono',monospace;font-size:14px;font-weight:700;color:#fbbf24;">
+              ฿${fmtDec(totalPriceShown)}
+            </td>
+          </tr>
+        </tfoot>`:""}
+      </table>
+    </div>
+  </div>
+  </div>`;
+}
+
+/* ADD DOC MODAL */
+function renderAddDocModal(){
+  return`<div class="modal-bg" onclick="if(event.target===this)closeAddDoc()">
+  <div class="modal-box">
+    <div style="font-size:16px;font-weight:700;margin-bottom:18px;color:#0f172a;">📬 เพิ่มรายการส่งไปรษณีย์</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div>
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">วันที่</div>
+        <input type="date" value="${newDoc.date}" oninput="newDoc.date=this.value" style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 10px;color:#0f172a;font-size:12px;"/>
+      </div>
+      <div>
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;">ประเภท</div>
+        <select oninput="newDoc.type=this.value" style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 10px;color:#0f172a;font-size:12px;">
+          ${TYPES.map(t=>`<option value="${t}" ${newDoc.type===t?"selected":""}>${t}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;color:#64748b;margin-bottom:4px;">ผู้ส่ง (ฝ่าย/แผนก)</div>
+      <select oninput="newDoc.sender=this.value" style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 10px;color:#0f172a;font-size:12px;">
+        <option value="">— ไม่ระบุแผนก —</option>
+        ${DEPTS.map((d,i)=>`<option value="${d}" ${newDoc.sender===d?"selected":""}>${d}</option>`).join("")}
+      </select>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;color:#64748b;margin-bottom:4px;">ผู้รับ</div>
+      <input type="text" placeholder="ชื่อผู้รับ / หน่วยงาน" value="${newDoc.recipient}" oninput="newDoc.recipient=this.value"
+        style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 10px;color:#0f172a;font-size:12px;"
+        onfocus="this.style.borderColor='#38bdf8'" onblur="this.style.borderColor='#1e3a5f'"/>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;color:#64748b;margin-bottom:4px;">TRACKING NUMBER</div>
+      <input type="text" placeholder="เช่น EF123456789TH" value="${newDoc.tracking}" oninput="newDoc.tracking=this.value"
+        style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 10px;color:#fb923c;font-family:'DM Mono',monospace;font-size:12px;letter-spacing:1px;"
+        onfocus="this.style.borderColor='#38bdf8'" onblur="this.style.borderColor='#1e3a5f'"/>
+    </div>
+    <!-- ✅ NEW: PRICE FIELD -->
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;color:#64748b;margin-bottom:4px;">💵 ราคาค่าส่ง (บาท)</div>
+      <div style="position:relative;">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#34d399;font-family:'DM Mono',monospace;font-size:13px;font-weight:600;">฿</span>
+        <input type="number" min="0" step="0.01" placeholder="0.00" value="${newDoc.price||""}" oninput="newDoc.price=+this.value||0"
+          style="width:100%;background:#f8fafc;border:1px solid #dbe5f0;border-radius:8px;padding:8px 10px 8px 24px;color:#34d399;font-family:'DM Mono',monospace;font-size:13px;font-weight:600;"
+          onfocus="this.style.borderColor='#38bdf8'" onblur="this.style.borderColor='#1e3a5f'"/>
+      </div>
+    </div>
+
+    <!-- SLIP READER -->
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:16px;">
+      <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:8px;">📎 อ่านสลิปไปรษณีย์อัตโนมัติ (ต้องใช้ Claude API Key)</div>
+      <input type="password" id="apiKeyInput" placeholder="Claude API Key: sk-ant-api..."
+        style="width:100%;background:#f3f7fb;border:1px solid #dbe5f0;border-radius:6px;padding:7px 10px;color:#64748b;font-size:11px;font-family:'DM Mono',monospace;margin-bottom:8px;"/>
+      <input type="file" accept="image/*" onchange="readSlip(this)" style="color:#64748b;font-size:11px;width:100%;cursor:pointer;"/>
+      <div id="slipMsg" style="margin-top:6px;font-size:11px;min-height:16px;"></div>
+    </div>
+
+    <div style="display:flex;gap:10px;">
+      <button class="btn" onclick="addDoc()" style="flex:1;background:linear-gradient(135deg,#0ea5e9,#0284c7);border-radius:10px;padding:11px;color:#fff;font-weight:700;font-size:14px;">บันทึก</button>
+      <button class="btn" onclick="closeAddDoc()" style="flex:1;background:#1e3a5f;border-radius:10px;padding:11px;color:#64748b;font-weight:600;font-size:14px;">ยกเลิก</button>
+    </div>
+  </div>
+  </div>`;
+}
+
+/* SLIP READER */
+async function readSlip(input){
+  const file=input.files[0]; if(!file)return;
+  const apiKey=document.getElementById("apiKeyInput")?.value?.trim();
+  const msgEl=document.getElementById("slipMsg");
+  if(!apiKey){if(msgEl)msgEl.innerHTML=`<span style="color:#fca5a5;">⚠️ กรุณาใส่ Claude API Key ก่อน</span>`;return;}
+  if(msgEl)msgEl.textContent="⏳ กำลังอ่านสลิป…";
+  try{
+    const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
+    const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},body:JSON.stringify({model:"claude-opus-4-6",max_tokens:500,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:file.type,data:b64}},{type:"text",text:`อ่านสลิปไปรษณีย์และตอบกลับด้วย JSON เท่านั้น ไม่มีข้อความอื่น:
+{"tracking":"หมายเลขพัสดุ","recipient":"ชื่อผู้รับ","type":"พัสดุ หรือ จดหมาย หรือ EMS","date":"YYYY-MM-DD","price":ราคาค่าส่งเป็นตัวเลข}
+ถ้าไม่มีข้อมูลใส่ string ว่างหรือ 0`}]}]})});
+    const data=await resp.json();
+    const text=data?.content?.[0]?.text||"";
+    const json=JSON.parse(text.replace(/```json|```/g,"").trim());
+    if(json.tracking)newDoc.tracking=json.tracking;
+    if(json.recipient)newDoc.recipient=json.recipient;
+    if(json.type&&TYPES.includes(json.type))newDoc.type=json.type;
+    if(json.date)newDoc.date=json.date;
+    if(json.price)newDoc.price=+json.price||0;
+    if(msgEl)msgEl.innerHTML=`<span style="color:#34d399;">✓ อ่านสลิปสำเร็จ! Tracking: ${json.tracking||"ไม่พบ"} | ราคา: ฿${json.price||0}</span>`;
+    render();
+  }catch(e){if(msgEl)msgEl.innerHTML=`<span style="color:#fca5a5;">❌ ${e.message}</span>`;}
+}
+
+/* CHART */
+function drawChart(){
+  const cv=document.getElementById("mainChart"); if(!cv)return;
+  const SC=2;
+  const W=cv.parentElement.clientWidth-36||500;
+  const H=240;
+  cv.width=W*SC; cv.height=H*SC; cv.style.height=H+"px";
+  const g=cv.getContext("2d"); g.scale(SC,SC);
+  const padL=50,padR=58,padT=44,padB=36;
+  const plotX=padL,plotY=padT,plotW=W-padL-padR,plotH=H-padT-padB;
+  const maxY=LIMIT*1.12;
+  g.fillStyle="#ffffff"; g.fillRect(0,0,W,H);
+  g.fillStyle="#0f172a"; g.font="bold 13px 'DM Mono',sans-serif";
+  g.textAlign="left"; g.fillText("ค่าใช้จ่ายรายเดือน "+CUR_Y, padL, 18);
+  g.fillStyle="#64748b"; g.font="10px sans-serif";
+  g.textAlign="right"; g.fillText("วงเงิน / เดือน:  ฿"+fmt(LIMIT), W-padR, 18);
+  g.textAlign="left";
+  const yTicks=[0,1000,2000,3000];
+  yTicks.forEach(v=>{
+    const yPx=plotY+plotH-(v/maxY)*plotH;
+    if(v>0){g.strokeStyle="#e2e8f0";g.lineWidth=1;g.setLineDash([]);g.beginPath();g.moveTo(plotX,yPx);g.lineTo(plotX+plotW,yPx);g.stroke();}
+    g.fillStyle=v===0?"#64748b":"#94a3b8";g.font="9px sans-serif";g.textAlign="right";
+    g.fillText(v===0?"0":fmt(v), plotX-6, yPx+3);
+  });
+  g.strokeStyle="#cbd5e1";g.lineWidth=1.5;g.setLineDash([]);g.beginPath();
+  g.moveTo(plotX,plotY+plotH);g.lineTo(plotX+plotW,plotY+plotH);g.stroke();
+  const limitYpx=plotY+plotH-(LIMIT/maxY)*plotH;
+  g.strokeStyle="rgba(239,68,68,.65)";g.lineWidth=1.5;g.setLineDash([6,4]);
+  g.beginPath();g.moveTo(plotX,limitYpx);g.lineTo(plotX+plotW,limitYpx);g.stroke();
+  g.setLineDash([]);
+  g.fillStyle="#ef4444";g.beginPath();
+  if(g.roundRect)g.roundRect(plotX+plotW+4,limitYpx-9,50,18,4);else g.rect(plotX+plotW+4,limitYpx-9,50,18);
+  g.fill();
+  g.fillStyle="#fff";g.font="bold 9px sans-serif";g.textAlign="center";
+  g.fillText("฿"+fmt(LIMIT), plotX+plotW+29, limitYpx+4);
+  g.textAlign="left";
+  const barTotalW=plotW/12;
+  const barW=Math.max(barTotalW*0.6,6);
+  const barOffset=(barTotalW-barW)/2;
+  (expenses||[]).forEach((e,i)=>{
+    const v=e.total||0;
+    const barH=v>0?Math.max((v/maxY)*plotH,3):2;
+    const bx=plotX+i*barTotalW+barOffset;
+    const by=plotY+plotH-barH;
+    const isCur=e.month===CUR_M,isOver=v>LIMIT;
+    const grd=g.createLinearGradient(bx,by,bx,by+barH);
+    if(isCur){grd.addColorStop(0,"#38bdf8");grd.addColorStop(1,"#0284c7");}
+    else if(isOver){grd.addColorStop(0,"#ef4444");grd.addColorStop(1,"#991b1b");}
+    else{grd.addColorStop(0,"#60a5fa");grd.addColorStop(1,"#3b82f6");}
+    if(isCur){g.shadowColor="#38bdf8";g.shadowBlur=8;}
+    g.fillStyle=grd;g.beginPath();
+    if(g.roundRect)g.roundRect(bx,by,barW,barH,3);else g.rect(bx,by,barW,barH);
+    g.fill();g.shadowBlur=0;
+    if(v>0){
+      g.fillStyle=isCur?"#38bdf8":isOver?"#fca5a5":"#94a3b8";
+      g.font=(isCur?"bold ":"")+"8px sans-serif";g.textAlign="center";
+      g.fillText("฿"+fmt(v), bx+barW/2, by-4);
+    }
+    g.fillStyle=isCur?"#38bdf8":"#475569";
+    g.font=(isCur?"bold ":"")+"8px sans-serif";g.textAlign="center";
+    g.fillText(MONTHS_S[e.month], bx+barW/2, plotY+plotH+13);
+  });
+  const legItems=[
+    {grad:["#34d399","#059669"],label:"ปกติ"},
+    {grad:["#38bdf8","#0284c7"],label:"เดือนปัจจุบัน"},
+    {grad:["#ef4444","#991b1b"],label:"เกินงบ"},
+    {dashed:true,color:"rgba(239,68,68,.7)",label:"วงเงิน ฿"+fmt(LIMIT)},
+  ];
+  let lx=padL;const ly=H-10;
+  g.font="9px sans-serif";
+  legItems.forEach(item=>{
+    if(item.dashed){
+      g.strokeStyle=item.color;g.lineWidth=1.5;g.setLineDash([4,3]);
+      g.beginPath();g.moveTo(lx,ly-3);g.lineTo(lx+14,ly-3);g.stroke();g.setLineDash([]);
+    }else{
+      const gr=g.createLinearGradient(lx,0,lx+12,0);
+      gr.addColorStop(0,item.grad[0]);gr.addColorStop(1,item.grad[1]);
+      g.fillStyle=gr;g.beginPath();
+      if(g.roundRect)g.roundRect(lx,ly-8,12,6,2);else g.rect(lx,ly-8,12,6);
+      g.fill();
+    }
+    g.fillStyle="#94a3b8";g.textAlign="left";
+    g.fillText(item.label, lx+16, ly);
+    lx+=item.label.length*5.5+28;
+  });
+}
+
+function resetMonthExpense(month){
+  if(!confirm(`รีเซ็ตค่าใช้จ่าย${MONTHS_F[month]}เป็น 0 ทั้งหมด?`))return;
+  expenses=expenses.map(e=>e.month!==month?e:{...e,total:0,departments:Object.fromEntries(Object.keys(e.departments).map(k=>[k,0]))});
+  persist();render();
+}
+
+function quickAddExpense(){
+  const month=+document.getElementById("qa_month").value;
+  const dept=document.getElementById("qa_dept").value||"__unspecified__";
+  const amt=Math.max(0,+document.getElementById("qa_amount").value||0);
+  const msgEl=document.getElementById("qa_msg");
+  if(document.getElementById("qa_amount").value===""){
+    if(msgEl)msgEl.innerHTML=`<span style="color:#fca5a5;">⚠️ กรุณาใส่จำนวนเงิน</span>`;return;
+  }
+  expenses=expenses.map(e=>{
+    if(e.month!==month)return e;
+    const nd={...e.departments,[dept]:amt};
+    return{...e,departments:nd,total:Object.values(nd).reduce((s,v)=>s+(+v||0),0)};
+  });
+  persist();render();
+  const m2=document.getElementById("qa_msg");
+  if(m2)m2.innerHTML=`<span style="color:#34d399;">✓ บันทึก ฿${fmt(amt)} ใน${MONTHS_F[month]}${dept!=="__unspecified__"?" ("+dept+")":""} แล้ว</span>`;
+  const inp=document.getElementById("qa_amount");
+  if(inp){inp.value="";inp.focus();}
+}
+
+function goAdmin(tab){page="admin";if(!adminAuthed){render();return;}atab=tab;render();window.scrollTo({top:0,behavior:"smooth"});}
+function scrollToId(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});}
+function setPage(p){page=p;render();}
+function setAtab(t){atab=t;render();}
+function openAddDoc(){addDocOpen=true;newDoc={date:now.toISOString().split("T")[0],sender:"",recipient:"",type:TYPES[0],tracking:"",price:0};render();}
+function closeAddDoc(){addDocOpen=false;render();}
+function tryLogin(){if(adminPass===ADMIN_PASS){adminAuthed=true;adminErr=false;}else{adminErr=true;}render();}
+
+function addDoc(){
+  if(!newDoc.recipient||!newDoc.tracking){alert("กรุณากรอกผู้รับและ Tracking Number");return;}
+  docs=[...docs,{...newDoc,price:+newDoc.price||0,id:"d"+Date.now()}];
+  addDocOpen=false;persist();render();
+}
+function deleteDoc(id){if(!confirm("ต้องการลบรายการนี้?"))return;docs=docs.filter(d=>d.id!==id);persist();render();}
+function updateDocField(id,key,val){docs=docs.map(d=>d.id===id?{...d,[key]:val}:d);persist();}
+
+function editDocField(el,id,key){
+  const doc=docs.find(d=>d.id===id);if(!doc)return;
+  const val=doc[key];
+  const inp=document.createElement("input");
+  inp.type=key==="date"?"date":"text";inp.value=val;
+  inp.style.cssText=`background:#071020;border:1px solid #38bdf8;border-radius:6px;padding:3px 8px;color:#f0f9ff;font-size:11px;font-family:inherit;width:130px;outline:none;`;
+  el.replaceWith(inp);inp.focus();
+  const commit=()=>{docs=docs.map(d=>d.id===id?{...d,[key]:inp.value||val}:d);persist();render();};
+  inp.addEventListener("blur",commit);
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")commit();if(e.key==="Escape")render();});
+}
+
+/* ✅ NEW: inline price editor */
+function editDocPrice(el,id){
+  const doc=docs.find(d=>d.id===id);if(!doc)return;
+  const val=+doc.price||0;
+  const inp=document.createElement("input");
+  inp.type="number";inp.value=val;inp.min=0;inp.step="0.01";inp.placeholder="0.00";
+  inp.style.cssText=`background:#071020;border:1px solid #34d399;border-radius:6px;padding:3px 8px;color:#34d399;font-size:12px;font-family:'DM Mono',monospace;width:90px;text-align:right;outline:none;font-weight:600;`;
+  el.replaceWith(inp);inp.focus();inp.select();
+  const commit=()=>{
+    const n=Math.max(0,+inp.value||0);
+    docs=docs.map(d=>d.id===id?{...d,price:n}:d);
+    persist();render();
+  };
+  inp.addEventListener("blur",commit);
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")commit();if(e.key==="Escape")render();});
+}
+
+function editNum(el,month,dept){
+  const cur=(expenses.find(e=>e.month===month)?.departments?.[dept])||0;
+  const inp=document.createElement("input");
+  inp.type="number";inp.value=cur;inp.min=0;
+  inp.style.cssText=`background:#071020;border:1px solid #38bdf8;border-radius:6px;padding:2px 6px;color:#f0f9ff;font-size:10px;font-family:'DM Mono',monospace;width:72px;text-align:right;outline:none;`;
+  el.replaceWith(inp);inp.focus();inp.select();
+  const commit=()=>{
+    const n=Math.max(0,+inp.value||0);
+    expenses=expenses.map(e=>{
+      if(e.month!==month)return e;
+      const nd={...e.departments,[dept]:n};
+      return{...e,departments:nd,total:Object.values(nd).reduce((s,v)=>s+(+v||0),0)};
+    });
+    persist();render();
+  };
+  inp.addEventListener("blur",commit);
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")commit();if(e.key==="Escape")render();});
+}
+
+loadData();
+</script>
+</body>
+</html>
